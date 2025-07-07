@@ -10,6 +10,8 @@ import os
 import shutil
 import pytest
 import re
+import requests
+import time
 
 from .helpers import (
     execute_tutor_command,
@@ -145,3 +147,75 @@ def test_build_tokens_with_source_tokens_only():
     assert not os.path.exists(
         utility_classes_css
     ), f"{utility_classes_css} should not exist when --source-tokens-only is used."
+
+
+@pytest.mark.order(6)
+def test_build_tokens_generates_minified_bundle():
+    """
+    Ensure that the build-tokens job generates the minified bundle files for hosting.
+    """
+    theme = "light"
+    result = execute_tutor_command(["local", "do", PARAGON_JOB, "--themes", theme])
+    assert result.returncode == 0, f"Error running build-tokens job: {result.stderr}"
+
+    tutor_root = get_tutor_root_path()
+    compiled_path = os.path.join(tutor_root, PARAGON_COMPILED_THEMES_FOLDER)
+
+    minified_theme_bundle = os.path.join(
+        compiled_path, "themes", theme, f"{theme}.min.css"
+    )
+    minified_core_bundle = os.path.join(compiled_path, "core", "core.min.css")
+
+    assert os.path.exists(
+        minified_core_bundle
+    ), f"Minified core bundle file {minified_core_bundle} does not exist."
+    assert os.path.exists(
+        minified_theme_bundle
+    ), f"Minified theme bundle file {minified_theme_bundle} does not exist."
+
+
+@pytest.mark.order(7)
+def test_build_tokens_hosted_files():
+    """
+    Verify that the compiled themes can be served through Caddy and paragon-statics.
+
+    This test builds tokens, starts the required services, and checks that the
+    static files are accessible via HTTP requests.
+    """
+    lms_host = "local.openedx.io"
+
+    result = execute_tutor_command(["local", "do", PARAGON_JOB])
+    assert result.returncode == 0, f"Error running build-tokens job: {result.stderr}"
+
+    result = execute_tutor_command(
+        ["config", "printvalue", "PARAGON_STATIC_URL_PREFIX"]
+    )
+    assert (
+        result.returncode == 0
+    ), f"Error getting PARAGON_STATIC_URL_PREFIX: {result.stderr}"
+    static_url_prefix = result.stdout.strip()
+
+    services_result = execute_tutor_command(
+        ["local", "start", "-d", "caddy", "paragon-statics"]
+    )
+    assert (
+        services_result.returncode == 0
+    ), f"Error starting services: {services_result.stderr}"
+
+    time.sleep(5)
+
+    try:
+        base_url = f"http://{lms_host}/{static_url_prefix}"
+        test_files = ["core/core.min.css", "themes/light/light.min.css"]
+
+        for test_file in test_files:
+            url = f"{base_url}{test_file}"
+            response = requests.get(url, timeout=5)
+
+            assert (
+                response.status_code == 200
+            ), f"Expected status 200 for {url}, but got {response.status_code}. "
+
+    finally:
+        execute_tutor_command(["local", "stop", "caddy"])
+        execute_tutor_command(["local", "stop", "paragon-statics"])
