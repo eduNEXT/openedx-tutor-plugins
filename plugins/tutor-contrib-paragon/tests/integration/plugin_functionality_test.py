@@ -192,7 +192,7 @@ def test_build_tokens_hosted_files():
     services_result = execute_tutor_command(["local", "start", "-d", "caddy", "mfe"])
     assert services_result.returncode == 0, "Error starting hosting services"
 
-    time.sleep(1)
+    time.sleep(10)
 
     try:
         base_url = f"http://{mfe_host}/{static_url_prefix}"
